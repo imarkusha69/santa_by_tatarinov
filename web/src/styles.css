@@ -1396,6 +1396,9 @@ textarea.input {
   text-align: center;
   overflow: hidden;
 }
+.cover-ph.file {
+  padding: 0;
+}
 .cover-ph img {
   width: 100%;
   height: 100%;

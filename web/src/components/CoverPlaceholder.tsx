@@ -24,7 +24,7 @@ export function CoverPlaceholder({ pending = false, large = false }: { pending?:
   }, []);
 
   return (
-    <div className={`cover-ph${large ? " large" : ""}${pending ? " pending" : ""}`} role="img" aria-label={pending ? "Ищем фото на странице" : "Фото появится позже"}>
+    <div className={`cover-ph${large ? " large" : ""}${pending ? " pending" : ""}${useFile && !pending ? " file" : ""}`} role="img" aria-label={pending ? "Ищем фото на странице" : "Фото появится позже"}>
       {useFile && !pending ? (
         <img src={EMPTY_WISH_IMAGE} alt="" draggable={false} />
       ) : (
