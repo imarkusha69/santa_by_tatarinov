@@ -3,6 +3,11 @@ import { initData } from "./telegram";
 
 const API_URL = import.meta.env.VITE_API_URL as string;
 
+/** Адрес другой Edge Function того же проекта. */
+export function fnUrl(name: string): string {
+  return API_URL.replace(/\/api\/?$/, `/${name}`);
+}
+
 /** Публичный URL фото в Supabase Storage (тот же проект, что и функции). */
 export function photoUrl(path: string): string {
   try {
@@ -27,6 +32,13 @@ const ERRORS: Record<string, string> = {
   too_many_wishes: "Желаний слишком много: не больше 50.",
   wish_not_found: "Желание не найдено, возможно, оно уже удалено.",
   upload: "Не удалось загрузить фото. Попробуйте ещё раз.",
+  bad_url: "Ссылка не подходит. Проверьте адрес.",
+  cover_type: "Подходят фото JPG, PNG, WebP или HEIC.",
+  cover_too_large: "Фото больше 10 МБ. Выберите поменьше.",
+  unreadable: "Не удалось прочитать фото. Попробуйте другое.",
+  unsupported_type: "Подходят фото JPG, PNG, WebP или HEIC.",
+  cover_missing: "Фото не найдено, загрузите его ещё раз.",
+  rate_limited: "Слишком много попыток. Подождите несколько минут.",
 };
 
 export class ApiError extends Error {
@@ -129,12 +141,16 @@ export function useQuery<T>(key: string | null, fetcher: () => Promise<T>, opts:
 }
 
 /** Загрузка уже сжатого файла по подписанному URL Supabase Storage. */
-export async function uploadBlob(signedUrl: string, blob: Blob) {
+export async function uploadBlob(signedUrl: string, blob: Blob, upsert = false) {
   let res: Response;
   try {
     res = await fetch(signedUrl, {
       method: "PUT",
-      headers: { "content-type": blob.type, "x-upsert": "false", "cache-control": "max-age=31536000" },
+      headers: {
+        "content-type": blob.type,
+        "x-upsert": upsert ? "true" : "false",
+        "cache-control": upsert ? "max-age=3600" : "max-age=31536000",
+      },
       body: blob,
     });
   } catch {

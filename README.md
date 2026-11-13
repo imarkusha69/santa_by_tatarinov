@@ -7,6 +7,8 @@ web/                      React + TypeScript + Vite + Motion (mini app)
 supabase/migrations/      схема Postgres, жеребьёвка perform_draw(), RLS, бакет фото
 supabase/functions/api    API mini app (проверка initData на каждый запрос)
 supabase/functions/bot    вебхук бота: /start и ответы в анонимном чате
+supabase/functions/fetch-cover   обложка желания со страницы товара
+supabase/functions/cover-upload  серверная конвертация своей обложки (HEIC и старые браузеры)
 ```
 
 ## Как устроена безопасность
@@ -39,6 +41,8 @@ supabase secrets set \
   APP_ORIGIN=https://<домен-mini-app>
 supabase functions deploy api --no-verify-jwt
 supabase functions deploy bot --no-verify-jwt
+supabase functions deploy fetch-cover --no-verify-jwt
+supabase functions deploy cover-upload --no-verify-jwt
 ```
 
 ### 3. Вебхук бота
@@ -59,14 +63,41 @@ npm install
 npm run build          # dist/ → любой статический хостинг (Vercel, Netlify, Cloudflare Pages)
 ```
 
+## Обложка желания
+
+Источник обложки по приоритету: своё фото (`manual`) → фото со страницы товара (`auto`) → заглушка (`none`).
+Файлы лежат только у нас, в закрытом bucket `wish-covers`: `{wish_id}/manual.webp` и `{wish_id}/auto.webp`.
+Внешние ссылки на картинки не хранятся, это запрещено ограничением в базе. Показ идёт по подписанным
+ссылкам (24 ч), которые API выдаёт только владельцу желания и его Санте.
+
+**Автоподгрузка** (`POST /functions/v1/fetch-cover`, `{ url, wishId }`). Вызывается при сохранении желания
+со ссылкой, если с этой страницы фото ещё не брали, и по кнопке «Обновить фото». По расписанию не запускается.
+- Разрешены только http/https и порты 80/443. Хост проверяется по IP после DNS: localhost, 127/8, 10/8,
+  172.16/12, 192.168/16, 169.254/16, 100.64/10, ::1, fc00::/7, fe80::/10, IPv4 внутри IPv6 и т. п.
+  Проверка повторяется на каждом редиректе (не больше 3) и для адреса картинки.
+- Таймаут 5 с. Страница: только `text/html`, до 2 МБ, читается потоком. Картинка: только JPEG/PNG/WebP,
+  до 5 МБ, формат сверяется по сигнатуре файла.
+- robots.txt по RFC 9309 для User-Agent `SantaCoverBot`: если путь запрещён или robots.txt отвечает 5xx,
+  возвращается `robots_disallowed`.
+- Источники: `og:image:secure_url` / `og:image` → `twitter:image` → `link rel=image_src` → JSON-LD `Product.image`.
+- Обрезка по центру до 3:4, 800 px, WebP q80 (ImageMagick WASM).
+- Не больше 30 обращений за 10 минут на пользователя.
+
+**Своё фото**: JPG, PNG, WebP или HEIC до 10 МБ. Браузер обрезает фото до 3:4, уменьшает до 1200 px и
+сохраняет в WebP 0.85. Если браузер не может прочитать файл (HEIC на Android) или не умеет кодировать WebP,
+то же делает функция `cover-upload`.
+
+**Заглушка**: файл `web/public/empty-wish.webp` (3:4, до 150 КБ), если он есть. Если нет, заглушка
+рисуется кодом.
+
 ## Проверки
 
 ```bash
-# подпись initData
-deno test --allow-env supabase/functions/_shared/telegram_test.ts
+# подпись initData, защита fetch-cover, robots.txt, разбор HTML, обработка картинок
+deno test --allow-net --allow-read --allow-env supabase/functions/_shared/
 # типы функций
-deno check supabase/functions/api/index.ts supabase/functions/bot/index.ts
-# типы и сборка фронтенда (бандл ≈105 КБ gzip)
+deno check supabase/functions/*/index.ts
+# типы и сборка фронтенда (бандл ≈107 КБ gzip)
 cd web && npm run build
 ```
 

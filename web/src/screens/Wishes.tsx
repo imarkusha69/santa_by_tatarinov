@@ -6,7 +6,7 @@ import { Btn, Empty, ErrorBox, Item, Stagger, Title } from "../components/ui";
 import { WishCard, WishGridSkeleton, sortByPriority } from "../components/WishCard";
 
 export function WishesScreen() {
-  const { myWishes, myWishesError, reloadMyWishes, push, lastAddedWish } = useApp();
+  const { myWishes, myWishesError, reloadMyWishes, push, lastAddedWish, coverPending } = useApp();
   useEffect(() => {
     void reloadMyWishes();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -32,7 +32,7 @@ export function WishesScreen() {
             </p>
             <div className="wish-grid">
               {sortByPriority(myWishes).map((w) => (
-                <WishCard key={w.id} wish={w} isNew={w.id === lastAddedWish} onOpen={() => push({ name: "wish", wish: w, owner: true })} />
+                <WishCard key={w.id} wish={w} isNew={w.id === lastAddedWish} pending={coverPending.has(w.id)} onOpen={() => push({ name: "wish", wish: w, owner: true })} />
               ))}
             </div>
           </Item>

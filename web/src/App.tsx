@@ -7,6 +7,8 @@ import type { GameState, MeResponse, Profile, Wish } from "./lib/types";
 import { Snow } from "./components/Decor";
 import { IconChat, IconGift, IconHeart, IconTree, IconUser } from "./components/Icons";
 import { ErrorBox, Skeleton } from "./components/ui";
+import { COVER_HINT, fetchCover } from "./lib/cover";
+import type { ApiError } from "./lib/api";
 import { Lobby } from "./screens/Lobby";
 import { GameScreen } from "./screens/Game";
 import { WishesScreen } from "./screens/Wishes";
@@ -180,6 +182,29 @@ function GameShell(props: {
   const game = useQuery<GameState>(`game:${gameId}`, () => api<GameState>("game", { gameId }), { cache: true });
   const wishes = useQuery<{ wishes: Wish[] }>(`wishes:${gameId}`, () => api("myWishes", { gameId }), { cache: true });
   const [lastAddedWish, setLastAdded] = useState<string | null>(null);
+  const [coverPending, setCoverPending] = useState<Set<string>>(() => new Set());
+  const reloadWishesRef = useRef(wishes.reload);
+  reloadWishesRef.current = wishes.reload;
+  const toastRef = useRef(props.toast);
+  toastRef.current = props.toast;
+
+  // Автоподгрузка обложки после сохранения: желание уже сохранено, ошибка только подсказывает.
+  const fetchCoverInBackground = useCallback((wishId: string, url: string, notifyOnError: boolean) => {
+    setCoverPending((s) => new Set(s).add(wishId));
+    fetchCover(url, wishId)
+      .then(async (r) => {
+        await reloadWishesRef.current();
+        if (r.status === "error" && notifyOnError) toastRef.current(COVER_HINT[r.reason], "error");
+      })
+      .catch((e: ApiError) => notifyOnError && toastRef.current(e.message, "error"))
+      .finally(() =>
+        setCoverPending((s) => {
+          const n = new Set(s);
+          n.delete(wishId);
+          return n;
+        }),
+      );
+  }, []);
 
   // Восстановление экрана после сворачивания / перезапуска
   const [stack, setStack] = useState<Route[]>(() => {
@@ -236,6 +261,8 @@ function GameShell(props: {
       },
       reloadMyWishes: wishes.reload,
       lastAddedWish,
+      coverPending,
+      fetchCoverInBackground,
       route,
       push,
       back,
@@ -244,7 +271,7 @@ function GameShell(props: {
       toast: props.toast,
       toLobby: props.toLobby,
     }),
-    [gameId, game.data, game.error, game.reload, props, wishes, lastAddedWish, route, push, back, goTab, replace],
+    [gameId, game.data, game.error, game.reload, props, wishes, lastAddedWish, coverPending, fetchCoverInBackground, route, push, back, goTab, replace],
   );
 
   const showNav = route.name === "tab";

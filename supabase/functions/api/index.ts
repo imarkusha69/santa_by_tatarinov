@@ -3,6 +3,16 @@
 
 import { db, deliverMessage, publicUrl } from "../_shared/db.ts";
 import { appLink, escapeHtml, randomCode, sendText, sleep, verifyInitData, type TgUser } from "../_shared/telegram.ts";
+import { COVER_REASONS, normalizeUserUrl, type CoverReason } from "../_shared/cover.ts";
+import {
+  autoPath,
+  COVER_BUCKET,
+  coverFiles,
+  manualPath,
+  removeCovers,
+  signCovers,
+  wishForWrite,
+} from "../_shared/covers.ts";
 
 const CORS = {
   "access-control-allow-origin": Deno.env.get("APP_ORIGIN") ?? "*",
@@ -111,15 +121,21 @@ async function organizerOf(ctx: Ctx, gameId: string) {
   return r;
 }
 
-async function wishesOf(memberId: string) {
+/**
+ * Желания с обложкой. Обложка отдаётся подписанной ссылкой (bucket закрытый).
+ * forOwner=true — ещё и автофото со страницы и ошибка автоподгрузки (нужны только в форме владельца).
+ */
+async function wishesOf(memberId: string, forOwner: boolean) {
   const { data } = await db
     .from("wishes")
     .select("*, photos:wish_photos(file_url, position)")
     .eq("member_id", memberId)
     .order("priority", { ascending: true })
     .order("created_at", { ascending: false });
+  const rows = data ?? [];
+  const signed = await signCovers(rows.flatMap((w) => [w.cover_file_url, forOwner ? w.cover_auto_url : null]));
   // deno-lint-ignore no-explicit-any
-  return (data ?? []).map((w: any) => ({
+  return rows.map((w: any) => ({
     id: w.id,
     title: w.title,
     url: w.url,
@@ -129,12 +145,42 @@ async function wishesOf(memberId: string) {
     details: w.details ?? {},
     comment: w.comment,
     updatedAt: w.updated_at,
+    cover: {
+      source: w.cover_file_url && signed.get(w.cover_file_url) ? w.cover_source : "none",
+      url: (w.cover_file_url && signed.get(w.cover_file_url)) ?? null,
+      autoUrl: forOwner && w.cover_auto_url ? (signed.get(w.cover_auto_url) ?? null) : null,
+      error: forOwner ? w.cover_error : null,
+      updatedAt: w.cover_updated_at,
+    },
     photos: (w.photos ?? [])
       // deno-lint-ignore no-explicit-any
       .sort((a: any, b: any) => a.position - b.position)
       // deno-lint-ignore no-explicit-any
       .map((p: any) => ({ base: p.file_url, small: publicUrl(`${p.file_url}@480`), large: publicUrl(`${p.file_url}@1280`) })),
   }));
+}
+
+/** Обложка, которую можно записать в строку желания, с учётом реально лежащих файлов. */
+async function reconcileCover(
+  wishId: string,
+  url: string | null,
+  // deno-lint-ignore no-explicit-any
+  c: any,
+) {
+  const files = await coverFiles(wishId);
+  const hasAuto = !!url && c?.hasAuto === true && files.auto;
+  let source: "manual" | "auto" | "none" = c?.source === "manual" || c?.source === "auto" ? c.source : "none";
+  if (source === "manual" && !files.manual) source = "none";
+  if (source === "auto" && !hasAuto) source = "none";
+  const error: CoverReason | null =
+    url && !hasAuto && COVER_REASONS.includes(c?.error) ? (c.error as CoverReason) : null;
+  return {
+    cover_source: source,
+    cover_file_url: source === "manual" ? manualPath(wishId) : source === "auto" ? autoPath(wishId) : null,
+    cover_auto_url: hasAuto ? autoPath(wishId) : null,
+    cover_error: error,
+    cover_updated_at: new Date().toISOString(),
+  };
 }
 
 /** Санте сообщаем об изменении желаний получателя не чаще раза в 3 часа. */
@@ -316,14 +362,58 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
 
   async myWishes(ctx) {
     const { member } = await memberOf(ctx, uuid(ctx.body.gameId));
-    return { wishes: await wishesOf(member.id) };
+    return { wishes: await wishesOf(member.id, true) };
+  },
+
+  /** Подписанный URL для ручной обложки, уже обрезанной и сжатой на клиенте: {wish_id}/manual.webp. */
+  async coverUploadUrl(ctx) {
+    await memberOf(ctx, uuid(ctx.body.gameId));
+    const wishId = uuid(ctx.body.wishId);
+    if (!(await wishForWrite(wishId, ctx.user.id))) fail(403, "forbidden");
+    const { data, error } = await db.storage.from(COVER_BUCKET).createSignedUploadUrl(manualPath(wishId), { upsert: true });
+    if (error || !data) throw error ?? new Error("upload_url_failed");
+    return { url: data.signedUrl };
+  },
+
+  /**
+   * Выбор показываемой обложки: manual (своё фото) или auto (фото со страницы).
+   * Для ещё не сохранённого желания ничего не пишет, только возвращает ссылки для превью.
+   */
+  async setCover(ctx) {
+    const { game, member } = await memberOf(ctx, uuid(ctx.body.gameId));
+    const wishId = uuid(ctx.body.wishId);
+    const source = ctx.body.source === "auto" ? "auto" : "manual";
+    const access = await wishForWrite(wishId, ctx.user.id);
+    if (!access) fail(403, "forbidden");
+    const files = await coverFiles(wishId);
+    if (source === "manual" && !files.manual) fail(409, "cover_missing");
+    if (source === "auto" && !files.auto) fail(409, "cover_missing");
+    if (access!.exists) {
+      const path = source === "manual" ? manualPath(wishId) : autoPath(wishId);
+      const patch: Record<string, unknown> = {
+        cover_source: source,
+        cover_file_url: path,
+        cover_updated_at: new Date().toISOString(),
+      };
+      if (source === "auto") patch.cover_auto_url = autoPath(wishId);
+      const { error } = await db.from("wishes").update(patch).eq("id", wishId).eq("member_id", member.id);
+      if (error) throw error;
+      await notifySanta(game, member);
+    }
+    const signed = await signCovers([files.manual ? manualPath(wishId) : null, files.auto ? autoPath(wishId) : null]);
+    return {
+      saved: access!.exists,
+      manualUrl: signed.get(manualPath(wishId)) ?? null,
+      autoUrl: signed.get(autoPath(wishId)) ?? null,
+    };
   },
 
   async saveWish(ctx) {
     const { game, member } = await memberOf(ctx, uuid(ctx.body.gameId));
     const w = ctx.body.wish ?? {};
-    let url = str(w.url, 2000);
-    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+    const rawUrl = str(w.url, 2000);
+    const url = rawUrl ? normalizeUserUrl(rawUrl) : null;
+    if (url && !/^https?:\/\/[^\s]+$/i.test(url)) fail(400, "bad_url");
     let price: number | null = null;
     if (w.price !== null && w.price !== undefined && w.price !== "") {
       price = Number(w.price);
@@ -352,20 +442,20 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       if (typeof p !== "string" || !p.startsWith(`wishes/${ctx.user.id}/`) || p.length > 200) fail(400, "bad_request");
     }
 
-    let wishId: string;
-    if (w.id) {
-      wishId = uuid(w.id);
-      const { data: own } = await db.from("wishes").select("id").eq("id", wishId).eq("member_id", member.id).maybeSingle();
-      if (!own) fail(404, "wish_not_found");
-      const { error } = await db.from("wishes").update(row).eq("id", wishId);
+    // id нового желания создаёт форма (под него уже могла быть загружена обложка)
+    const wishId = w.id ? uuid(w.id) : crypto.randomUUID();
+    const { data: existing } = await db.from("wishes").select("id, member_id").eq("id", wishId).maybeSingle();
+    if (existing && existing.member_id !== member.id) fail(404, "wish_not_found");
+    const cover = await reconcileCover(wishId, url, w.cover);
+    if (existing) {
+      const { error } = await db.from("wishes").update({ ...row, ...cover }).eq("id", wishId);
       if (error) throw error;
       await db.from("wish_photos").delete().eq("wish_id", wishId);
     } else {
       const { count } = await db.from("wishes").select("id", { count: "exact", head: true }).eq("member_id", member.id);
       if ((count ?? 0) >= 50) fail(400, "too_many_wishes");
-      const { data, error } = await db.from("wishes").insert(row).select("id").single();
-      if (error || !data) throw error;
-      wishId = data.id;
+      const { error } = await db.from("wishes").insert({ id: wishId, ...row, ...cover });
+      if (error) throw error;
     }
     if (photos.length) {
       const { error } = await db
@@ -374,19 +464,23 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       if (error) throw error;
     }
     await notifySanta(game, member);
-    return { id: wishId, wishes: await wishesOf(member.id) };
+    return { id: wishId, wishes: await wishesOf(member.id, true) };
   },
 
   async deleteWish(ctx) {
     const { game, member } = await memberOf(ctx, uuid(ctx.body.gameId));
+    const wishId = uuid(ctx.body.wishId);
     const { error, count } = await db
       .from("wishes")
       .delete({ count: "exact" })
-      .eq("id", uuid(ctx.body.wishId))
+      .eq("id", wishId)
       .eq("member_id", member.id);
     if (error) throw error;
-    if (count) await notifySanta(game, member);
-    return { wishes: await wishesOf(member.id) };
+    if (count) {
+      await removeCovers(wishId);
+      await notifySanta(game, member);
+    }
+    return { wishes: await wishesOf(member.id, true) };
   },
 
   /** «Мой получатель»: только для его Санты, получатель ищется по моему member_id, без id от клиента. */
@@ -395,7 +489,7 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     if (game.status !== "drawn") fail(409, "not_drawn");
     const brief = await recipientBrief(member.id);
     if (!brief) fail(404, "not_found");
-    return { ...brief, wishes: await wishesOf(brief.memberId) };
+    return { ...brief, wishes: await wishesOf(brief.memberId, false) };
   },
 
   async openEnvelope(ctx) {

@@ -1,29 +1,26 @@
 import { motion } from "motion/react";
 import { useRef, useState } from "react";
 import { PRIORITY_LABEL, type Photo, type Wish } from "../lib/types";
-import { IconImage } from "./Icons";
 import { formatPrice } from "./ui";
 import { haptic } from "../lib/telegram";
+import { galleryOf } from "../lib/cover";
+import { CoverPlaceholder } from "./CoverPlaceholder";
 
 /** Фото со свайпом (нативный scroll-snap) и точками-индикаторами. */
 export function PhotoCarousel({
   photos,
   size,
   onTap,
+  pending,
 }: {
   photos: Photo[];
   size: "small" | "large";
   onTap?: (index: number) => void;
+  pending?: boolean;
 }) {
   const [idx, setIdx] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-  if (!photos.length) {
-    return (
-      <div className="photo-empty">
-        <IconImage size={36} />
-      </div>
-    );
-  }
+  if (!photos.length) return <CoverPlaceholder pending={pending} large={size === "large"} />;
   return (
     <>
       <div
@@ -59,8 +56,9 @@ export function PhotoCarousel({
   );
 }
 
-export function WishCard({ wish, onOpen, isNew }: { wish: Wish; onOpen: () => void; isNew?: boolean }) {
+export function WishCard({ wish, onOpen, isNew, pending }: { wish: Wish; onOpen: () => void; isNew?: boolean; pending?: boolean }) {
   const price = formatPrice(wish.price);
+  const photos = galleryOf(wish);
   return (
     <motion.div
       layout="position"
@@ -80,9 +78,9 @@ export function WishCard({ wish, onOpen, isNew }: { wish: Wish; onOpen: () => vo
         onKeyDown={(e) => e.key === "Enter" && onOpen()}
       >
         <div className="wish-photo">
-          <PhotoCarousel photos={wish.photos} size="small" />
+          <PhotoCarousel photos={photos} size="small" pending={pending && !photos.length} />
           <span className={`prio prio-${wish.priority}`}>{PRIORITY_LABEL[wish.priority]}</span>
-          {wish.photos.length > 1 && <span className="photo-count">{wish.photos.length} фото</span>}
+          {photos.length > 1 && <span className="photo-count">{photos.length} фото</span>}
         </div>
         <div className="wish-meta">
           {price && <div className="price">{price}</div>}

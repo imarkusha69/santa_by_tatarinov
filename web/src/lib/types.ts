@@ -86,6 +86,27 @@ export interface WishDetails {
   model?: string;
 }
 
+export type CoverSource = "auto" | "manual" | "none";
+export type CoverReason =
+  | "invalid_url"
+  | "blocked_host"
+  | "robots_disallowed"
+  | "timeout"
+  | "not_html"
+  | "no_image"
+  | "too_large"
+  | "download_failed";
+
+export interface WishCover {
+  source: CoverSource;
+  /** Подписанная ссылка на показываемую обложку (наша копия в Storage). */
+  url: string | null;
+  /** Подписанная ссылка на фото со страницы товара (только у владельца). */
+  autoUrl: string | null;
+  error: CoverReason | null;
+  updatedAt: string | null;
+}
+
 export interface Wish {
   id: string;
   title: string;
@@ -96,6 +117,8 @@ export interface Wish {
   details: WishDetails;
   comment: string | null;
   updatedAt: string;
+  cover: WishCover;
+  /** Дополнительные фото после обложки. */
   photos: Photo[];
 }
 

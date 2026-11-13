@@ -25,16 +25,22 @@ function toBlob(canvas: HTMLCanvasElement, type: string, q: number): Promise<Blo
   return new Promise((r) => canvas.toBlob(r, type, q));
 }
 
-async function render(src: CanvasImageSource & { width: number; height: number }, maxSide: number, square: boolean) {
+/** aspect — ширина/высота для обрезки по центру (1 — квадрат, 0.75 — 3:4), null — без обрезки. */
+function draw(src: CanvasImageSource & { width: number; height: number }, maxSide: number, aspect: number | null) {
   let sx = 0,
     sy = 0,
     sw = src.width,
     sh = src.height;
-  if (square) {
-    const side = Math.min(sw, sh);
-    sx = (sw - side) / 2;
-    sy = (sh - side) / 2;
-    sw = sh = side;
+  if (aspect) {
+    if (sw / sh > aspect) {
+      const w = sh * aspect;
+      sx = (sw - w) / 2;
+      sw = w;
+    } else {
+      const h = sw / aspect;
+      sy = (sh - h) / 2;
+      sh = h;
+    }
   }
   const scale = Math.min(1, maxSide / Math.max(sw, sh));
   const w = Math.round(sw * scale);
@@ -45,6 +51,11 @@ async function render(src: CanvasImageSource & { width: number; height: number }
   const ctx = canvas.getContext("2d")!;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
+  return canvas;
+}
+
+async function render(src: CanvasImageSource & { width: number; height: number }, maxSide: number, square: boolean) {
+  const canvas = draw(src, maxSide, square ? 1 : null);
   let blob = await toBlob(canvas, "image/webp", 0.82);
   if (!blob || blob.type !== "image/webp") blob = await toBlob(canvas, "image/jpeg", 0.85);
   if (!blob) throw new ApiError("upload");
@@ -79,4 +90,16 @@ export async function uploadAvatar(file: File): Promise<string> {
   });
   await uploadBlob(items[0].urls["320"], blob);
   return items[0].base;
+}
+
+/**
+ * Обложка: обрезка по центру до 3:4, длинная сторона до maxSide, только WebP.
+ * Бросает ошибку, если браузер не смог прочитать файл или не умеет кодировать WebP.
+ */
+export async function renderCover(file: Blob, maxSide: number, quality: number): Promise<Blob> {
+  const img = await decode(file);
+  if (!img.width || !img.height) throw new Error("decode");
+  const blob = await toBlob(draw(img, maxSide, 3 / 4), "image/webp", quality);
+  if (!blob || blob.type !== "image/webp") throw new Error("no_webp");
+  return blob;
 }

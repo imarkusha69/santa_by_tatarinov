@@ -25,6 +25,10 @@ export interface AppCtx {
   setMyWishes: (w: Wish[], addedId?: string) => void;
   reloadMyWishes: () => Promise<void>;
   lastAddedWish: string | null;
+  /** Желания, для которых сейчас идёт автоподгрузка обложки. */
+  coverPending: Set<string>;
+  /** Автоподгрузка в фоне после сохранения: не блокирует, по итогу обновляет список. */
+  fetchCoverInBackground: (wishId: string, url: string, notifyOnError: boolean) => void;
   route: Route;
   push: (r: Route) => void;
   back: () => void;

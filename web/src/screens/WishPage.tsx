@@ -7,14 +7,16 @@ import { PRIORITY_LABEL, type Wish } from "../lib/types";
 import { IconClose, IconEdit, IconExternal, IconTrash } from "../components/Icons";
 import { Btn, formatPrice } from "../components/ui";
 import { PhotoCarousel } from "../components/WishCard";
+import { galleryOf } from "../lib/cover";
 
 const DETAIL_LABEL = { color: "Цвет", size: "Размер", model: "Модель" } as const;
 
 export function WishPage({ wish: initial, owner }: { wish: Wish; owner: boolean }) {
-  const { myWishes, setMyWishes, gameId, back, push, toast } = useApp();
+  const { myWishes, setMyWishes, gameId, back, push, toast, coverPending } = useApp();
   // Для владельца берём свежую версию из общего списка (после редактирования)
   const wish = (owner && myWishes?.find((w) => w.id === initial.id)) || initial;
   const [zoom, setZoom] = useState<number | null>(null);
+  const photos = galleryOf(wish);
   const [busy, setBusy] = useState(false);
   const price = formatPrice(wish.price);
   const details = (Object.keys(DETAIL_LABEL) as (keyof typeof DETAIL_LABEL)[]).filter((k) => wish.details?.[k]);
@@ -37,7 +39,7 @@ export function WishPage({ wish: initial, owner }: { wish: Wish; owner: boolean 
   return (
     <div className="screen no-nav">
       <motion.div className="gallery" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25 }}>
-        <PhotoCarousel photos={wish.photos} size="large" onTap={(i) => setZoom(i)} />
+        <PhotoCarousel photos={photos} size="large" onTap={(i) => setZoom(i)} pending={owner && coverPending.has(wish.id)} />
         <span className={`prio prio-${wish.priority}`} style={{ top: "calc(var(--top) + 12px)", left: 16, fontSize: 12 }}>
           {PRIORITY_LABEL[wish.priority]}
         </span>
@@ -92,7 +94,7 @@ export function WishPage({ wish: initial, owner }: { wish: Wish; owner: boolean 
       )}
 
       <AnimatePresence>
-        {zoom !== null && wish.photos[zoom] && (
+        {zoom !== null && photos[zoom] && (
           <motion.div
             className="zoom"
             initial={{ opacity: 0 }}
@@ -102,7 +104,7 @@ export function WishPage({ wish: initial, owner }: { wish: Wish; owner: boolean 
             onClick={() => setZoom(null)}
           >
             <motion.img
-              src={wish.photos[zoom].large}
+              src={photos[zoom].large}
               alt=""
               initial={{ scale: 0.92 }}
               animate={{ scale: 1 }}

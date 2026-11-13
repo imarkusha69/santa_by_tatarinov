@@ -6,3 +6,9 @@ verify_jwt = false
 
 [functions.bot]
 verify_jwt = false
+
+[functions.fetch-cover]
+verify_jwt = false
+
+[functions.cover-upload]
+verify_jwt = false
