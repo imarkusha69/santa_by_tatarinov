@@ -1,0 +1,14 @@
+project_id = "santa-two-families"
+
+# Аутентификация идёт через Telegram initData внутри функций, а не через Supabase JWT.
+[functions.api]
+verify_jwt = false
+
+[functions.bot]
+verify_jwt = false
+
+[functions.fetch-cover]
+verify_jwt = false
+
+[functions.cover-upload]
+verify_jwt = false
